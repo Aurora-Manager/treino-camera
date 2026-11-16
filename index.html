@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#0b1220">
+<title>Treino na Câmera</title>
+<style>
+  :root {
+    --ink: #0b1220; --panel: rgba(11,18,32,.72); --line: rgba(255,255,255,.14);
+    --text: #f3f6fb; --muted: #a9b4c7;
+    --go: #3df2c0; --warn: #ffb648; --bad: #ff6b6b;
+    --sat: env(safe-area-inset-top, 0px); --sab: env(safe-area-inset-bottom, 0px);
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; margin: 0; background: var(--ink); color: var(--text);
+    font: 16px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; overflow: hidden; }
+  [hidden] { display: none !important; }
+  button { font: inherit; color: inherit; border: 0; cursor: pointer; }
+  button:focus-visible { outline: 3px solid var(--go); outline-offset: 2px; }
+
+  /* Tela inicial */
+  #home { position: fixed; inset: 0; display: flex; flex-direction: column; justify-content: center; gap: 22px;
+    padding: calc(24px + var(--sat)) 24px calc(24px + var(--sab)); max-width: 520px; margin: 0 auto; overflow-y: auto; }
+  #home h1 { font-size: 34px; line-height: 1.1; margin: 0; letter-spacing: -.02em; text-wrap: balance; }
+  #home h1 span { color: var(--go); }
+  #home p { margin: 0; color: var(--muted); }
+  #home ol { margin: 0; padding: 0; list-style: none; display: grid; gap: 12px; counter-reset: s; }
+  #home li { counter-increment: s; display: grid; grid-template-columns: 30px 1fr; gap: 12px; align-items: start; }
+  #home li::before { content: counter(s); width: 30px; height: 30px; border-radius: 50%; border: 1.5px solid var(--go);
+    color: var(--go); display: grid; place-items: center; font-weight: 700; font-size: 14px; }
+  .primary { background: var(--go); color: #04241b; font-weight: 800; font-size: 19px; padding: 18px; border-radius: 16px; }
+  .primary:disabled { opacity: .5; }
+  #status { min-height: 1.4em; font-size: 14px; }
+  #status.err { color: var(--bad); }
+
+  /* Tela do treino */
+  #stage { position: fixed; inset: 0; background: #000; }
+  #stage video, #stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  #stage.mirror video, #stage.mirror canvas { transform: scaleX(-1); }
+
+  #counter { position: absolute; top: calc(14px + var(--sat)); left: 14px; width: 132px; height: 132px; }
+  #counter svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+  #counter circle { fill: none; stroke-width: 9; }
+  #counter .bg { fill: var(--panel); stroke: var(--line); }
+  #counter .fg { stroke: var(--go); stroke-linecap: round; transition: stroke-dashoffset .3s; }
+  #counter .num { position: absolute; inset: 0; display: grid; place-content: center; text-align: center; }
+  #reps { font-size: 54px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
+  #goal { font-size: 14px; color: var(--muted); }
+
+  #depth { position: absolute; right: 16px; top: 50%; transform: translateY(-50%); width: 16px; height: 44%;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  #depthFill { position: absolute; left: 0; right: 0; top: 0; height: 0; background: var(--warn); }
+  #depthFill.ok { background: var(--go); }
+  #depth::after { content: ""; position: absolute; left: -4px; right: -4px; bottom: 0; border-top: 2px dashed #fff; opacity: .7; }
+  #depthLabel { position: absolute; right: 40px; top: calc(50% + 22% - 9px); font-size: 11px; letter-spacing: .08em;
+    text-transform: uppercase; color: #fff; text-shadow: 0 1px 4px #000; }
+
+  #info { position: absolute; top: calc(18px + var(--sat)); right: 14px; text-align: right; font-size: 12px;
+    color: var(--muted); background: var(--panel); padding: 6px 10px; border-radius: 10px; font-variant-numeric: tabular-nums; }
+
+  #cue { position: absolute; left: 14px; right: 14px; bottom: calc(96px + var(--sab)); text-align: center;
+    font-size: 26px; font-weight: 800; line-height: 1.15; padding: 14px 16px; border-radius: 16px;
+    background: var(--panel); border: 2px solid var(--warn); color: var(--warn); text-wrap: balance; }
+  #cue.good { border-color: var(--go); color: var(--go); }
+  #cue.bad { border-color: var(--bad); color: var(--bad); }
+
+  #bar { position: absolute; left: 0; right: 0; bottom: 0; display: flex; gap: 10px; justify-content: center;
+    padding: 12px 14px calc(12px + var(--sab)); background: linear-gradient(transparent, rgba(0,0,0,.75)); }
+  #bar button { flex: 1; max-width: 170px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+    padding: 14px 8px; font-weight: 600; font-size: 15px; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+
+  #done { position: absolute; inset: 0; background: rgba(6,10,20,.88); display: grid; place-content: center; gap: 18px;
+    text-align: center; padding: 24px; }
+  #done h2 { font-size: 34px; margin: 0; color: var(--go); }
+  #done p { margin: 0; font-size: 18px; color: var(--muted); }
+  #done b { color: var(--text); }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+
+<main id="home">
+  <h1>Treino na <span>Câmera</span></h1>
+  <p>Protótipo: o celular enxerga seu corpo, conta os agachamentos e corrige o movimento na hora.</p>
+  <ol>
+    <li>Apoie o celular em pé, na altura do joelho até a cintura, a 1 ou 2 metros de você.</li>
+    <li>Fique de frente ou um pouco de lado, com o corpo inteiro aparecendo, dos ombros aos pés.</li>
+    <li>Aumente o volume. Os avisos são falados.</li>
+  </ol>
+  <button class="primary" id="start" disabled>Carregando…</button>
+  <p id="status" role="status"></p>
+</main>
+
+<section id="stage" hidden>
+  <video id="video" playsinline muted></video>
+  <canvas id="overlay"></canvas>
+
+  <div id="counter" aria-live="polite">
+    <svg viewBox="0 0 120 120"><circle class="bg" cx="60" cy="60" r="52"/><circle class="fg" id="ring" cx="60" cy="60" r="52"/></svg>
+    <div class="num"><div id="reps">0</div><div id="goal">de 12</div></div>
+  </div>
+  <div id="info">—</div>
+  <div id="depth"><div id="depthFill"></div></div>
+  <div id="depthLabel">meta</div>
+  <div id="cue" hidden></div>
+
+  <div id="bar">
+    <button id="swap">Trocar câmera</button>
+    <button id="voice">Voz: ligada</button>
+    <button id="reset">Zerar</button>
+  </div>
+
+  <div id="done" hidden>
+    <h2>Série completa</h2>
+    <p><b id="doneGood">0</b> de <b id="doneTotal">0</b> repetições com boa execução</p>
+    <button class="primary" id="again">Nova série</button>
+  </div>
+</section>
+
+<script type="module">
+import { PoseLandmarker, FilesetResolver } from './vendor/vision_bundle.mjs';
+import { SquatCounter, measure, CUES } from './squat.js';
+
+const $ = (id) => document.getElementById(id);
+const GOAL = 12;
+const video = $('video'), canvas = $('overlay'), ctx = canvas.getContext('2d');
+const counter = new SquatCounter();
+const testVideo = new URLSearchParams(location.search).get('video'); // modo de teste com arquivo de vídeo
+let landmarker, stream, devices = [], deviceIdx = -1, voiceOn = true, running = false, lostSince = 0;
+
+/* ---------- Carrega o detector de corpo ---------- */
+async function loadModel() {
+  const fileset = await FilesetResolver.forVisionTasks('./vendor/wasm');
+  const make = (delegate) => PoseLandmarker.createFromOptions(fileset, {
+    baseOptions: { modelAssetPath: './vendor/pose_landmarker_lite.task', delegate },
+    runningMode: 'VIDEO', numPoses: 1,
+  });
+  try { landmarker = await make('GPU'); } catch { landmarker = await make('CPU'); }
+}
+loadModel().then(() => {
+  $('start').disabled = false; $('start').textContent = 'Começar';
+  if (testVideo) begin();
+}).catch((e) => fail('Não consegui carregar o detector. Recarregue a página. (' + e.message + ')'));
+
+function fail(msg) { $('status').textContent = msg; $('status').className = 'err'; }
+
+/* ---------- Câmera ---------- */
+async function openCamera(constraints) {
+  stream?.getTracks().forEach((t) => t.stop());
+  stream = await navigator.mediaDevices.getUserMedia({
+    audio: false,
+    video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 }, ...constraints },
+  });
+  const track = stream.getVideoTracks()[0];
+  // Abre o campo de visão ao máximo quando o aparelho permite (grande angular)
+  try {
+    const caps = track.getCapabilities?.();
+    if (caps?.zoom && caps.zoom.min < 1) await track.applyConstraints({ advanced: [{ zoom: caps.zoom.min }] });
+  } catch {}
+  const s = track.getSettings();
+  const front = s.facingMode ? s.facingMode === 'user' : /front|frontal|user|facetime/i.test(track.label);
+  $('stage').classList.toggle('mirror', front);
+  video.srcObject = stream;
+  await video.play();
+  return track;
+}
+
+async function listCameras() {
+  const all = await navigator.mediaDevices.enumerateDevices();
+  devices = all.filter((d) => d.kind === 'videoinput');
+}
+
+async function swapCamera() {
+  if (devices.length < 2) return showCue('Só encontrei uma câmera', 'bad', 2000);
+  deviceIdx = (deviceIdx + 1) % devices.length;
+  const d = devices[deviceIdx];
+  try {
+    const track = await openCamera({ deviceId: { exact: d.deviceId } });
+    showCue(nameOf(track.label), 'good', 1800);
+  } catch { showCue('Não consegui abrir essa câmera', 'bad', 2000); }
+}
+
+function nameOf(label) {
+  if (/ultra/i.test(label)) return 'Traseira grande angular';
+  if (/front|frontal/i.test(label)) return 'Câmera frontal';
+  if (/tele/i.test(label)) return 'Traseira teleobjetiva';
+  if (/back|traseira|rear/i.test(label)) return 'Câmera traseira';
+  return label || 'Câmera';
+}
+
+/* ---------- Voz e avisos ---------- */
+let lastSpoken = {}, cueTimer;
+function say(text, key = text, gap = 0) {
+  if (!voiceOn || !('speechSynthesis' in window)) return;
+  const now = performance.now();
+  if (gap && now - (lastSpoken[key] || 0) < gap) return;
+  lastSpoken[key] = now;
+  speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = 'pt-BR'; u.rate = 1.1;
+  speechSynthesis.speak(u);
+}
+function showCue(text, kind = '', ms = 2200) {
+  const el = $('cue');
+  el.textContent = text; el.className = kind; el.hidden = false;
+  clearTimeout(cueTimer);
+  if (ms) cueTimer = setTimeout(() => (el.hidden = true), ms);
+}
+
+/* ---------- Tela ---------- */
+const RING = 2 * Math.PI * 52;
+$('ring').style.strokeDasharray = RING;
+function render() {
+  $('reps').textContent = counter.reps;
+  $('ring').style.strokeDashoffset = RING * (1 - Math.min(1, counter.reps / GOAL));
+}
+render();
+
+const BONES = [[11,12],[11,13],[13,15],[12,14],[14,16],[11,23],[12,24],[23,24],[23,25],[25,27],[24,26],[26,28],[27,31],[28,32]];
+const JOINTS = [0,11,12,13,14,15,16,23,24,25,26,27,28,31,32];
+function drawSkeleton(lm, ok) {
+  const w = canvas.width, h = canvas.height;
+  ctx.clearRect(0, 0, w, h);
+  if (!lm) return;
+  const color = ok ? '#3df2c0' : '#ffb648';
+  ctx.lineWidth = Math.max(4, w / 160); ctx.lineCap = 'round'; ctx.strokeStyle = color; ctx.fillStyle = color;
+  ctx.shadowColor = 'rgba(0,0,0,.6)'; ctx.shadowBlur = 6;
+  for (const [a, b] of BONES) {
+    if ((lm[a].visibility ?? 1) < 0.4 || (lm[b].visibility ?? 1) < 0.4) continue;
+    ctx.beginPath(); ctx.moveTo(lm[a].x * w, lm[a].y * h); ctx.lineTo(lm[b].x * w, lm[b].y * h); ctx.stroke();
+  }
+  for (const i of JOINTS) {
+    if ((lm[i].visibility ?? 1) < 0.4) continue;
+    ctx.beginPath(); ctx.arc(lm[i].x * w, lm[i].y * h, ctx.lineWidth * 1.3, 0, 7); ctx.fill();
+  }
+}
+
+/* ---------- Laço principal: um quadro por vez ---------- */
+let lastTs = -1;
+function frame() {
+  if (!running) return;
+  schedule();
+  if (video.readyState < 2 || !video.videoWidth) return;
+  if (canvas.width !== video.videoWidth) { canvas.width = video.videoWidth; canvas.height = video.videoHeight; }
+  const ts = performance.now();
+  if (ts <= lastTs) return;
+  lastTs = ts;
+  const res = landmarker.detectForVideo(video, ts);
+  const image = res.landmarks?.[0], world = res.worldLandmarks?.[0];
+  if (!image || !world) return onLost(null);
+
+  const m = measure(world, image);
+  drawSkeleton(image, m.visible);
+  if (!m.visible) return onLost(image);
+  lostSince = 0;
+
+  const ev = counter.update(m);
+  $('info').textContent = 'joelho ' + Math.round(counter.kneeSm) + '°';
+  $('depthFill').style.height = counter.depth * 100 + '%';
+  $('depthFill').classList.toggle('ok', counter.depth >= 1);
+  if (!ev) return;
+
+  if (ev.type === 'rep') {
+    render();
+    if (counter.reps >= GOAL) return finish();
+    if (ev.perfect) { showCue('Perfeito!', 'good', 1200); say(String(ev.reps)); }
+    else { showCue(CUES[ev.cue]); say(ev.reps + '. ' + CUES[ev.cue]); }
+  } else if (ev.type === 'shallow') {
+    showCue(CUES.depth + ' — não contou', 'bad'); say(CUES.depth);
+  } else if (ev.type === 'cue') {
+    showCue(CUES[ev.cue]); say(CUES[ev.cue], ev.cue, 8000);
+  }
+}
+function onLost(image) {
+  if (!image) drawSkeleton(null);
+  const now = performance.now();
+  lostSince ||= now;
+  $('info').textContent = 'procurando…';
+  if (now - lostSince > 1500) { showCue(CUES.lost, 'bad', 1000); say(CUES.lost, 'lost', 10000); }
+}
+function schedule() {
+  if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(frame);
+  else requestAnimationFrame(frame);
+}
+
+function finish() {
+  running = false;
+  $('doneGood').textContent = counter.good; $('doneTotal').textContent = counter.reps;
+  $('done').hidden = false; $('cue').hidden = true;
+  say('Série completa. ' + counter.good + ' de ' + counter.reps + ' com boa execução.');
+}
+function restart() {
+  counter.reset(); render();
+  $('done').hidden = true; $('depthFill').style.height = 0;
+  if (!running) { running = true; schedule(); }
+}
+
+/* ---------- Começar ---------- */
+async function begin() {
+  $('start').disabled = true; $('status').className = ''; $('status').textContent = 'Abrindo a câmera…';
+  try {
+    if (testVideo) {
+      video.src = testVideo; video.loop = true; await video.play();
+    } else {
+      if (!navigator.mediaDevices?.getUserMedia) throw new Error('nocam');
+      say('Vamos lá'); // destrava a voz no iPhone (precisa de um toque)
+      const track = await openCamera({ facingMode: 'user' });
+      await listCameras();
+      deviceIdx = devices.findIndex((d) => d.deviceId === track.getSettings().deviceId);
+    }
+  } catch (e) {
+    $('start').disabled = false;
+    return fail(e.name === 'NotAllowedError'
+      ? 'A câmera foi bloqueada. Libere a câmera para este site nos ajustes do navegador e toque em Começar de novo.'
+      : 'Não consegui abrir a câmera. Abra esta página pelo Safari, em um endereço que comece com https.');
+  }
+  $('home').hidden = true; $('stage').hidden = false;
+  try { await navigator.wakeLock?.request('screen'); } catch {}
+  running = true; schedule();
+}
+
+$('start').onclick = begin;
+$('swap').onclick = swapCamera;
+$('reset').onclick = restart;
+$('again').onclick = restart;
+$('voice').onclick = () => {
+  voiceOn = !voiceOn;
+  $('voice').textContent = 'Voz: ' + (voiceOn ? 'ligada' : 'desligada');
+  if (!voiceOn) speechSynthesis?.cancel();
+};
+document.addEventListener('visibilitychange', async () => {
+  if (document.visibilityState === 'visible' && running) { try { await navigator.wakeLock?.request('screen'); } catch {} }
+});
+window.__app = { counter }; // para testes
+</script>
+</body>
+</html>
