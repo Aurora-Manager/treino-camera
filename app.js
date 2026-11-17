@@ -1,7 +1,7 @@
 import { PoseLandmarker, FilesetResolver } from './vendor/vision_bundle.mjs';
 import { measure, makeDetector, DETECTORS, CUES } from './motion.js';
 import { buildPlan, bmi, estimateMinutes, GOALS, LEVELS, PLACES, LIMITS, GROUPS, EXERCISES } from './plan.js';
-import { currentUser, signUp, signIn, signOut } from './auth.js';
+import { currentUser, signUp, signIn, signOut, loadData, saveData, consumeRedirect, requestPasswordReset, setNewPassword } from './auth.js';
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -10,21 +10,41 @@ const app = $('app');
 /* ================= Dados guardados no aparelho ================= */
 const KEY = 'treino-camera.v1';
 const EMPTY = { profile: null, plan: null, next: 0, history: [] };
-let user = currentUser(), S = { ...EMPTY };
-const save = () => { try { localStorage.setItem(KEY + ':' + user, JSON.stringify(S)); } catch {} };
-// Cada conta tem os seus próprios dados
+let user = currentUser()?.email || null, S = { ...EMPTY }, booting = false, syncTimer, syncWarned = false;
+const saveLocal = () => { try { localStorage.setItem(KEY + ':' + user, JSON.stringify(S)); } catch {} };
+// Salva no aparelho na hora e envia para a nuvem logo em seguida
+const save = () => {
+  saveLocal();
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(() => saveData(S).then(() => (syncWarned = false)).catch(() => {
+    if (!syncWarned) { syncWarned = true; toast('Sem conexão: seus dados ficam neste aparelho e sobem depois.', 4000); }
+  }), 600);
+};
+// Cópia guardada neste aparelho, para abrir rápido e funcionar sem internet
 function loadUser() {
   S = { ...EMPTY };
   if (!user) return;
   try {
     const mine = localStorage.getItem(KEY + ':' + user), legacy = localStorage.getItem(KEY);
     if (mine) S = { ...EMPTY, ...JSON.parse(mine) };
-    else if (legacy) { S = { ...EMPTY, ...JSON.parse(legacy) }; localStorage.removeItem(KEY); save(); } // dados de antes do login
+    else if (legacy) { S = { ...EMPTY, ...JSON.parse(legacy) }; localStorage.removeItem(KEY); saveLocal(); } // dados de antes do login
   } catch {}
+}
+// A nuvem é a versão oficial: se houver dados lá, eles valem. Se não, sobe o que está no aparelho.
+async function syncFromCloud() {
+  if (!user) return;
+  try {
+    const remote = await loadData();
+    if (remote?.profile) { S = { ...EMPTY, ...remote }; saveLocal(); }
+    else if (S.profile) await saveData(S);
+  } catch (e) {
+    if (!currentUser()) { user = null; S = { ...EMPTY }; toast('Sua sessão venceu. Entre de novo.'); }
+    else toast('Não consegui buscar seus dados agora. Verifique a internet.');
+  }
 }
 loadUser();
 
-let tab = 'treino', wizard = null, player = null, authMode = null, exQuery = '', exGroup = '', exOpen = null;
+let tab = 'treino', wizard = null, player = null, authMode = null, pendingEmail = '', exQuery = '', exGroup = '', exOpen = null;
 
 function toast(msg, ms = 2600) {
   $('toast').textContent = msg; $('toast').hidden = false;
@@ -166,18 +186,62 @@ function authView() {
       <p id="a_err" class="small" style="color:var(--bad)" role="alert" hidden></p>
       <button class="primary" type="submit">${up ? 'Criar conta' : 'Entrar'}</button>
     </form>
-    <p class="muted small">Versão de teste: a conta fica guardada só neste aparelho.</p>`;
+    ${up ? '' : '<button class="ghost" data-act="forgot">Esqueci minha senha</button>'}`;
+}
+
+function noticeView() {
+  if (authMode === 'newpass') return `<h1>Crie uma nova <span>senha</span></h1>
+    <form id="passForm" class="card" novalidate>
+      <label class="field"><span class="muted small">Nova senha (mínimo de 6 caracteres)</span><input id="a_pass" type="password" autocomplete="new-password" required></label>
+      <p id="a_err" class="small" style="color:var(--bad)" role="alert" hidden></p>
+      <button class="primary" type="submit">Salvar nova senha</button>
+    </form>`;
+  const reset = authMode === 'sent-reset';
+  return `<div class="spacer"></div><h1>${reset ? 'Veja seu <span>e-mail</span>' : 'Confirme seu <span>e-mail</span>'}</h1>
+    <div class="card"><p>Enviamos um link para <b style="overflow-wrap:anywhere">${esc(pendingEmail)}</b>.</p>
+      <p class="muted">${reset ? 'Abra o e-mail e toque no link para criar uma nova senha.' : 'Abra o e-mail e toque no link para ativar sua conta. Depois é só entrar.'}</p>
+      <p class="muted small">Não chegou? Olhe na caixa de spam.</p></div>
+    <div class="spacer"></div><button class="primary" data-act="auth" data-v="login">Ir para o login</button>`;
 }
 
 async function submitAuth() {
   const err = $('a_err'), btn = app.querySelector('#authForm button');
   err.hidden = true; btn.disabled = true;
   try {
-    user = await (authMode === 'signup' ? signUp : signIn)($('a_email').value, $('a_pass').value);
-    loadUser(); authMode = null; tab = 'treino';
-    if (!S.profile) return startWizard();
-    render();
+    const email = $('a_email').value.trim().toLowerCase();
+    if (authMode === 'signup') {
+      const r = await signUp(email, $('a_pass').value);
+      if (r.needsConfirm) { pendingEmail = email; authMode = 'sent-confirm'; return render(); }
+    } else await signIn(email, $('a_pass').value);
+    await enterApp();
   } catch (e) { err.textContent = e.message; err.hidden = false; btn.disabled = false; }
+}
+
+// Depois de entrar: carrega os dados da pessoa e decide a primeira tela
+async function enterApp() {
+  user = currentUser().email; authMode = null; tab = 'treino'; wizard = null;
+  loadUser();
+  booting = true; render();
+  await syncFromCloud();
+  booting = false;
+  if (user && !S.profile) return startWizard();
+  render();
+}
+
+async function submitNewPass() {
+  const err = $('a_err'), btn = app.querySelector('#passForm button');
+  err.hidden = true; btn.disabled = true;
+  try { await setNewPassword($('a_pass').value); toast('Senha alterada.'); await enterApp(); }
+  catch (e) { err.textContent = e.message; err.hidden = false; btn.disabled = false; }
+}
+
+async function forgot() {
+  const err = $('a_err');
+  try {
+    const email = $('a_email').value.trim().toLowerCase();
+    await requestPasswordReset(email);
+    pendingEmail = email; authMode = 'sent-reset'; render();
+  } catch (e) { err.textContent = e.message; err.hidden = false; }
 }
 
 /* ================= Busca de exercícios ================= */
@@ -202,7 +266,9 @@ function exerciciosView() {
 function render() {
   let html, nav = false;
   if (player) html = playerView();
-  else if (!user) html = authMode ? authView() : welcomeView();
+  else if (authMode === 'newpass') html = noticeView();
+  else if (!user) html = !authMode ? welcomeView() : authMode.startsWith('sent') ? noticeView() : authView();
+  else if (booting && !S.profile) html = '<div class="spacer"></div><p class="center muted">Carregando seus dados…</p><div class="spacer"></div>';
   else if (wizard) html = wizardView();
   else if (!S.profile || !S.plan) { startWizard(); return; }
   else { nav = true; html = tab === 'ficha' ? fichaView() : tab === 'historico' ? historicoView() : tab === 'exercicios' ? exerciciosView() : treinoView(); }
@@ -507,7 +573,8 @@ app.addEventListener('click', (e) => {
   const act = b.dataset.act, v = b.dataset.v;
   if (act === 'redo') return startWizard();
   if (act === 'auth') { authMode = v || null; return render(); }
-  if (act === 'logout') { signOut(); user = null; loadUser(); wizard = null; return render(); }
+  if (act === 'logout') { clearTimeout(syncTimer); signOut(); user = null; loadUser(); wizard = null; return render(); }
+  if (act === 'forgot') return forgot();
   if (act === 'ex-open') { exOpen = exOpen === v ? null : v; $('exList').innerHTML = exList(); return; }
   if (act === 'ex-group') { exGroup = v; return render(); }
   if (act === 'practice') return practice(v);
@@ -531,7 +598,7 @@ app.addEventListener('click', (e) => {
   if (act === 'quit') return quitWorkout();
   if (act === 'home') { tab = player.free ? 'exercicios' : 'treino'; player = null; return render(); }
 });
-app.addEventListener('submit', (e) => { e.preventDefault(); if (e.target.id === 'authForm') submitAuth(); });
+app.addEventListener('submit', (e) => { e.preventDefault(); if (e.target.id === 'authForm') submitAuth(); if (e.target.id === 'passForm') submitNewPass(); });
 app.addEventListener('input', (e) => { if (e.target.id === 'exSearch') { exQuery = e.target.value; $('exList').innerHTML = exList(); } });
 app.addEventListener('keydown', (e) => { if (e.key === 'Enter' && wizard && e.target.tagName === 'INPUT') wizardNext(); });
 $('nav').addEventListener('click', (e) => { const b = e.target.closest('[data-tab]'); if (b) { tab = b.dataset.tab; render(); } });
@@ -549,4 +616,15 @@ document.addEventListener('visibilitychange', async () => {
 });
 
 window.__app = { get S() { return S; }, get player() { return player; }, get detector() { return detector; } }; // para testes
-render();
+
+// Abertura: trata a chegada pelo link do e-mail e busca os dados da conta
+(async () => {
+  booting = !!user;
+  render();
+  const came = await consumeRedirect();
+  if (came) booting = false;
+  if (came === 'recovery') { user = currentUser().email; authMode = 'newpass'; return render(); }
+  if (came === 'error') { user = null; authMode = 'login'; render(); return toast('Esse link venceu ou já foi usado. Entre ou peça outro.', 5000); }
+  if (came === 'signup') { toast('E-mail confirmado!'); return enterApp(); }
+  if (user) { await syncFromCloud(); booting = false; if (!player && !wizard) render(); }
+})();
