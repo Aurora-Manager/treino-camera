@@ -61,6 +61,12 @@
   .ex:first-of-type { border-top: 0; }
   .ex .dose { font-variant-numeric: tabular-nums; font-weight: 700; white-space: nowrap; }
   .ex .sub { grid-column: 1 / -1; font-size: 13px; color: var(--muted); }
+  .exbtn { text-align: left; padding: 0; font-weight: 600; grid-column: 1 / -1; }
+  .search { background: var(--card); border: 1.5px solid var(--line); border-radius: 14px; padding: 14px; font-size: 17px; width: 100%; }
+  .chips { display: flex; gap: 8px; overflow-x: auto; margin: 0 -18px; padding: 2px 18px; scrollbar-width: none; }
+  .chips::-webkit-scrollbar { display: none; }
+  .chip { flex: none; border: 1px solid var(--line); border-radius: 999px; padding: 8px 14px; font-size: 14px; font-weight: 600; color: var(--muted); }
+  .chip.on { background: var(--go); color: var(--go-ink); border-color: var(--go); }
   .tag { display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
     padding: 2px 7px; border-radius: 6px; background: #12302c; color: var(--go); vertical-align: 1px; }
   .facts { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
@@ -74,7 +80,7 @@
 
   nav { position: fixed; left: 0; right: 0; bottom: 0; display: flex; justify-content: center; background: rgba(11,18,32,.94);
     border-top: 1px solid var(--line); padding: 8px 12px calc(8px + var(--sab)); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
-  nav button { flex: 1; max-width: 180px; padding: 12px 6px; border-radius: 12px; font-weight: 600; color: var(--muted); }
+  nav button { flex: 1; max-width: 180px; padding: 12px 2px; font-size: 14px; border-radius: 12px; font-weight: 600; color: var(--muted); }
   nav button.on { color: var(--go); background: var(--card); }
 
   #toast { position: fixed; left: 18px; right: 18px; bottom: calc(100px + var(--sab)); margin: 0 auto; max-width: 520px;
@@ -122,6 +128,7 @@
 <main id="app"></main>
 <nav id="nav" hidden>
   <button data-tab="treino">Treino</button>
+  <button data-tab="exercicios">Exercícios</button>
   <button data-tab="ficha">Ficha</button>
   <button data-tab="historico">Histórico</button>
 </nav>

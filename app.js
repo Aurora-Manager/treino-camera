@@ -1,6 +1,7 @@
 import { PoseLandmarker, FilesetResolver } from './vendor/vision_bundle.mjs';
 import { measure, makeDetector, DETECTORS, CUES } from './motion.js';
-import { buildPlan, bmi, estimateMinutes, GOALS, LEVELS, PLACES, LIMITS, GROUPS } from './plan.js';
+import { buildPlan, bmi, estimateMinutes, GOALS, LEVELS, PLACES, LIMITS, GROUPS, EXERCISES } from './plan.js';
+import { currentUser, signUp, signIn, signOut } from './auth.js';
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -8,11 +9,22 @@ const app = $('app');
 
 /* ================= Dados guardados no aparelho ================= */
 const KEY = 'treino-camera.v1';
-let S = { profile: null, plan: null, next: 0, history: [] };
-try { S = { ...S, ...JSON.parse(localStorage.getItem(KEY) || '{}') }; } catch {}
-const save = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch {} };
+const EMPTY = { profile: null, plan: null, next: 0, history: [] };
+let user = currentUser(), S = { ...EMPTY };
+const save = () => { try { localStorage.setItem(KEY + ':' + user, JSON.stringify(S)); } catch {} };
+// Cada conta tem os seus próprios dados
+function loadUser() {
+  S = { ...EMPTY };
+  if (!user) return;
+  try {
+    const mine = localStorage.getItem(KEY + ':' + user), legacy = localStorage.getItem(KEY);
+    if (mine) S = { ...EMPTY, ...JSON.parse(mine) };
+    else if (legacy) { S = { ...EMPTY, ...JSON.parse(legacy) }; localStorage.removeItem(KEY); save(); } // dados de antes do login
+  } catch {}
+}
+loadUser();
 
-let tab = 'treino', wizard = null, player = null;
+let tab = 'treino', wizard = null, player = null, authMode = null, exQuery = '', exGroup = '', exOpen = null;
 
 function toast(msg, ms = 2600) {
   $('toast').textContent = msg; $('toast').hidden = false;
@@ -119,6 +131,7 @@ function fichaView() {
     </div></div>
     ${S.plan.days.map((d) => `<div class="card"><h2>${d.label} · ${d.focus}</h2><div>${d.items.map(exRow).join('')}</div></div>`).join('')}
     <button class="ghost" data-act="redo">Refazer as perguntas</button>
+    <div class="card"><p class="small muted">Conta</p><p style="overflow-wrap:anywhere">${esc(user)}</p><button class="ghost" data-act="logout">Sair da conta</button></div>
     <p class="muted small">Este plano é uma sugestão automática e não substitui a avaliação de um profissional de educação física ou de um médico. Se sentir dor, pare o exercício.</p>`;
 }
 
@@ -139,15 +152,60 @@ function welcomeView() {
       <p class="muted">1. Você responde algumas perguntas rápidas.</p>
       <p class="muted">2. Montamos sua ficha e seu plano de treino.</p>
       <p class="muted">3. Você treina e a câmera conta e corrige.</p></div>
-    <div class="spacer"></div><button class="primary" data-act="begin">Começar</button>`;
+    <div class="spacer"></div><button class="primary" data-act="auth" data-v="signup">Criar conta</button>
+    <button class="ghost" data-act="auth" data-v="login">Já tenho conta</button>`;
+}
+
+function authView() {
+  const up = authMode === 'signup';
+  return `<button class="ghost" data-act="auth" data-v="" style="width:auto;align-self:flex-start;padding:9px 14px">Voltar</button>
+    <h1>${up ? 'Crie sua <span>conta</span>' : 'Entre na sua <span>conta</span>'}</h1>
+    <form id="authForm" class="card" novalidate>
+      <label class="field"><span class="muted small">E-mail</span><input id="a_email" type="email" inputmode="email" autocomplete="email" autocapitalize="none" required></label>
+      <label class="field"><span class="muted small">Senha${up ? ' (mínimo de 6 caracteres)' : ''}</span><input id="a_pass" type="password" autocomplete="${up ? 'new-password' : 'current-password'}" required></label>
+      <p id="a_err" class="small" style="color:var(--bad)" role="alert" hidden></p>
+      <button class="primary" type="submit">${up ? 'Criar conta' : 'Entrar'}</button>
+    </form>
+    <p class="muted small">Versão de teste: a conta fica guardada só neste aparelho.</p>`;
+}
+
+async function submitAuth() {
+  const err = $('a_err'), btn = app.querySelector('#authForm button');
+  err.hidden = true; btn.disabled = true;
+  try {
+    user = await (authMode === 'signup' ? signUp : signIn)($('a_email').value, $('a_pass').value);
+    loadUser(); authMode = null; tab = 'treino';
+    if (!S.profile) return startWizard();
+    render();
+  } catch (e) { err.textContent = e.message; err.hidden = false; btn.disabled = false; }
+}
+
+/* ================= Busca de exercícios ================= */
+const plain = (s) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+function exList() {
+  const q = plain(exQuery.trim());
+  const list = EXERCISES.filter((e) => (!exGroup || e.g === exGroup) && (!q || plain(e.name + ' ' + GROUPS[e.g]).includes(q)));
+  if (!list.length) return '<p class="muted center">Nenhum exercício encontrado.</p>';
+  return list.map((e) => `<div class="ex"><button class="exbtn" data-act="ex-open" data-v="${e.id}">${esc(e.name)} ${e.cam ? '<span class="tag">câmera</span>' : ''}</button>
+    <span class="sub">${GROUPS[e.g]} · ${e.l.map((l) => PLACES[l].toLowerCase()).join(' e ')}</span>
+    ${exOpen === e.id ? `<div class="sub" style="display:grid;gap:10px;padding-top:8px"><span style="color:var(--text);font-size:15px">${esc(e.tip)}</span>
+      ${e.cam ? `<span>${DETECTORS[e.cam].view}.</span><button class="primary" data-act="practice" data-v="${e.id}">Praticar com a câmera</button>` : '<span>Este exercício ainda não tem correção por câmera.</span>'}</div>` : ''}</div>`).join('');
+}
+function exerciciosView() {
+  const chip = (k, label) => `<button class="chip ${exGroup === k ? 'on' : ''}" data-act="ex-group" data-v="${k}">${label}</button>`;
+  return `<h1>Exercícios</h1>
+    <input id="exSearch" class="search" type="search" placeholder="Buscar por nome ou músculo" value="${esc(exQuery)}" autocomplete="off">
+    <div class="chips">${chip('', 'Todos')}${Object.entries(GROUPS).map(([k, v]) => chip(k, v)).join('')}</div>
+    <div class="card"><div id="exList">${exList()}</div></div>`;
 }
 
 function render() {
   let html, nav = false;
   if (player) html = playerView();
+  else if (!user) html = authMode ? authView() : welcomeView();
   else if (wizard) html = wizardView();
-  else if (!S.profile || !S.plan) html = welcomeView();
-  else { nav = true; html = tab === 'ficha' ? fichaView() : tab === 'historico' ? historicoView() : treinoView(); }
+  else if (!S.profile || !S.plan) { startWizard(); return; }
+  else { nav = true; html = tab === 'ficha' ? fichaView() : tab === 'historico' ? historicoView() : tab === 'exercicios' ? exerciciosView() : treinoView(); }
   app.innerHTML = html;
   app.classList.toggle('nonav', !nav);
   $('nav').hidden = !nav;
@@ -159,11 +217,15 @@ function render() {
 const cur = () => player.day.items[player.ei];
 const goalOf = (it) => it.seconds || it.reps;
 
-function startWorkout() {
-  const day = S.plan.days[S.next % S.plan.days.length];
-  player = { day, ei: 0, set: 1, phase: 'intro', useCam: true, t0: Date.now(), log: day.items.map(() => ({ reps: 0, cam: 0, good: 0 })) };
-  say('Vamos começar o ' + day.label); // também destrava a voz no iPhone
+function startWorkout(day = S.plan.days[S.next % S.plan.days.length], free = false) {
+  player = { day, free, ei: 0, set: 1, phase: 'intro', useCam: true, t0: Date.now(), log: day.items.map(() => ({ reps: 0, cam: 0, good: 0 })) };
+  say(free ? day.focus : 'Vamos começar o ' + day.label); // também destrava a voz no iPhone
   render();
+}
+function practice(id) {
+  const e = EXERCISES.find((x) => x.id === id);
+  const item = { id: e.id, name: e.name, g: e.g, cam: e.cam || null, tip: e.tip, sets: 1, rest: 0, ...(e.time ? { seconds: 30 } : { reps: 10 }) };
+  startWorkout({ label: 'Treino livre', focus: e.name, items: [item] }, true);
 }
 
 function playerView() {
@@ -270,7 +332,8 @@ function finishWorkout() {
   const p = player, sum = (k) => p.log.reduce((s, l) => s + l[k], 0);
   p.summary = { reps: sum('reps'), camReps: sum('cam'), camGood: sum('good'), minutes: Math.max(1, Math.round((Date.now() - p.t0) / 60000)) };
   S.history.push({ date: new Date().toISOString(), label: p.day.label, focus: p.day.focus, ...p.summary });
-  S.next = (S.next + 1) % S.plan.days.length; save();
+  if (!p.free) S.next = (S.next + 1) % S.plan.days.length;
+  save();
   p.phase = 'done'; stopCamera(); $('rest').hidden = true;
   say('Treino concluído. Parabéns!');
   render();
@@ -442,7 +505,12 @@ app.addEventListener('click', (e) => {
   const b = e.target.closest('[data-act]');
   if (!b) return;
   const act = b.dataset.act, v = b.dataset.v;
-  if (act === 'begin' || act === 'redo') return startWizard();
+  if (act === 'redo') return startWizard();
+  if (act === 'auth') { authMode = v || null; return render(); }
+  if (act === 'logout') { signOut(); user = null; loadUser(); wizard = null; return render(); }
+  if (act === 'ex-open') { exOpen = exOpen === v ? null : v; $('exList').innerHTML = exList(); return; }
+  if (act === 'ex-group') { exGroup = v; return render(); }
+  if (act === 'practice') return practice(v);
   if (act === 'back') { wizard.i--; return render(); }
   if (act === 'next') return wizardNext();
   if (act === 'pick') { const st = STEPS[wizard.i]; wizard.data[st.key] = st.type === 'days' ? +v : v; return render(); }
@@ -461,8 +529,10 @@ app.addEventListener('click', (e) => {
     player.ei++; player.set = 1; player.useCam = true; return render();
   }
   if (act === 'quit') return quitWorkout();
-  if (act === 'home') { player = null; tab = 'treino'; return render(); }
+  if (act === 'home') { tab = player.free ? 'exercicios' : 'treino'; player = null; return render(); }
 });
+app.addEventListener('submit', (e) => { e.preventDefault(); if (e.target.id === 'authForm') submitAuth(); });
+app.addEventListener('input', (e) => { if (e.target.id === 'exSearch') { exQuery = e.target.value; $('exList').innerHTML = exList(); } });
 app.addEventListener('keydown', (e) => { if (e.key === 'Enter' && wizard && e.target.tagName === 'INPUT') wizardNext(); });
 $('nav').addEventListener('click', (e) => { const b = e.target.closest('[data-tab]'); if (b) { tab = b.dataset.tab; render(); } });
 $('swap').onclick = swapCamera;
